@@ -41,6 +41,8 @@ services:
     environment:
       - MINIO_ROOT_USER=admin
       - MINIO_ROOT_PASSWORD=password
+    volumes:
+      -  minio-data:/data
     networks:
       iceberg_net:
         aliases:
@@ -49,34 +51,35 @@ services:
       - 9001:9001
       - 9000:9000
     command: ["server", "/data", "--console-address", ":9001"]
-  mariadb:
-    hostname: mariadb
-    image: mariadb:10.5.8
-    container_name: mariadb
+  postgres:
+    hostname: postgres
+    image: 'postgres:latest'
+    container_name: postgres
     ports:
-      - 3306:3306
-    environment:
-      MYSQL_ROOT_PASSWORD: admin
-      MYSQL_USER: admin
-      MYSQL_PASSWORD: admin
-      MYSQL_DATABASE: metastore_db
+      - 5432:5432
     volumes:
-      - mariadb-data:/var/lib/mysql
+      - postgres-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: metastore_db
     networks:
       - iceberg_net
 
   hive-metastore:
     hostname: hive-metastore
-    image: 'bitsondatadev/hive-metastore:latest'
+    image: 'hive-metastore:3.2.0'
     container_name: hive
     ports:
       - 9083:9083 # Metastore Thrift
     volumes:
       - ./conf/metastore-site.xml:/opt/apache-hive-metastore-3.0.0-bin/conf/metastore-site.xml:ro
     environment:
-      METASTORE_DB_HOSTNAME: mariadb
+      - METASTORE_DB_HOSTNAME=postgres
+      - METASTORE_TYPE=postgres
+    command: "--METASTORE_TYPE postgres"
     depends_on:
-      - mariadb
+      - postgres
     networks:
       - iceberg_net
   trino:
@@ -111,6 +114,8 @@ networks:
   iceberg_net:
 volumes:
   mariadb-data:
+    driver: local
+  postgres-data:
     driver: local
   minio-data:
     driver: local
