@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  spark-master:
+    container_name: master
+    image: da-spark-image:3.4.1
+    entrypoint: ['./entrypoint.sh', 'master']
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8080" ]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    volumes:
+      - ./conf/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf
+    env_file:
+      - .env.spark
+    ports:
+      - '9090:8080'
+      - '7077:7077'
+    networks:
+      - net-spark
+
+  spark-worker-a:
+    container_name: worker-a
+    image: da-spark-image:3.4.1
+    entrypoint: ['./entrypoint.sh', 'worker']
+    depends_on:
+      - spark-master
+    env_file:
+      - .env.spark
+    volumes:
+      - /Users/hoangdung/Documents/Study/Scala/Test2/untitled/target/scala-2.12/untitled_2.12-0.1.0-SNAPSHOT.jar:/Users/hoangdung/Documents/Study/Scala/Test2/untitled/target/scala-2.12/untitled_2.12-0.1.0-SNAPSHOT.jar
+      - ./conf/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf
+    ports:
+      - "9091:8081"
+      - "7001:7000"
+    networks:
+      - net-spark
+  spark-worker-b:
+    container_name: worker-b
+    image: da-spark-image:3.4.1
+    entrypoint: ['./entrypoint.sh', 'worker']
+    depends_on:
+      - spark-master
+    env_file:
+      - .env.spark
+    volumes:
+      - /Users/hoangdung/Documents/Study/Scala/Test2/untitled/target/scala-2.12/untitled_2.12-0.1.0-SNAPSHOT.jar:/Users/hoangdung/Documents/Study/Scala/Test2/untitled/target/scala-2.12/untitled_2.12-0.1.0-SNAPSHOT.jar
+      - ./conf/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf
+    ports:
+      - "9092:8081"
+      - "7002:7000"
+    networks:
+      - net-spark
+    
+networks:
+  net-spark:
+    driver: bridge
