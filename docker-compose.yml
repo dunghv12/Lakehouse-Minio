@@ -120,3 +120,18 @@ volumes:
   minio-data:
     driver: local
       # - AWS_REGION=us-east-1
+
+  # spark-iceberg:
+  #   image: tabulario/spark-iceberg:3.4.1
+  #   container_name: spark-iceberg
+  #   networks:
+  #     iceberg_net:
+  #   volumes:
+  #     - ./spark/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf
+  #   depends_on:
+  #     - minio
+  #   ports:
+  #     - 8888:8888
+  #     - 8080:8080
+  #     - 10000:10000
+  #     - 10001:10001
