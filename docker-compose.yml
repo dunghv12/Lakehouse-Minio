@@ -21,20 +21,64 @@
 version: "3"
 
 services:
-  spark-iceberg:
-    image: tabulario/spark-iceberg:3.4.1
-    container_name: spark-iceberg
-    networks:
-      iceberg_net:
-    volumes:
-      - ./spark/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf
+  spark-master:
+    container_name: master
+    image: lakehouse/spark-iceberg:3.4.1
+    entrypoint: ['./entrypoint.sh', 'master']
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8080" ]
+      interval: 5s
+      timeout: 3s
+      retries: 3
     depends_on:
       - minio
+    volumes:
+      - ./spark/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf
+    env_file:
+      - .env.spark
     ports:
       - 8888:8888
       - 8080:8080
       - 10000:10000
       - 10001:10001
+    networks:
+      iceberg_net:
+  spark-worker-a:
+    container_name: worker-a
+    image: lakehouse/spark-iceberg:3.4.1
+    entrypoint: ['./entrypoint.sh', 'worker']
+    depends_on:
+      - spark-master
+    env_file:
+      - .env.spark
+    volumes:
+      - ./spark/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf
+    ports:
+      - 9093:8081
+      - 7001:7000
+    environment:
+      - SPARK_WORKER_CORES=3
+      - SPARK_WORKER_MEMORY=1G
+    networks:
+      iceberg_net:
+  spark-worker-b:
+    container_name: worker-b
+    image: lakehouse/spark-iceberg:3.4.1
+    entrypoint: ['./entrypoint.sh', 'worker']
+    depends_on:
+      - spark-master
+    env_file:
+      - .env.spark
+    volumes:
+      - ./spark/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf
+    environment:
+      - SPARK_WORKER_CORES=3
+      - SPARK_WORKER_MEMORY=1G
+    ports:
+      - 9094:8081
+      - 7002:7000
+    networks:
+      iceberg_net:
   minio:
     image: minio/minio
     container_name: minio
