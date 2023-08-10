@@ -19,8 +19,146 @@
     #   - AWS_SECRET_ACCESS_KEY=password
 ---
 version: "3"
-
+x-airflow-common:
+  &airflow-common
+  # In order to add custom dependencies or upgrade provider packages you can use your extended image.
+  # Comment the image line, place your Dockerfile in the directory where you placed the docker-compose.yaml
+  # and uncomment the "build" line below, Then run `docker-compose build` to build the images.
+  image: ${AIRFLOW_IMAGE_NAME:-apache/airflow-spark:2.6.2}
+  # build: .
+  #postgresql+psycopg2://<user>:<password>@<host>/<db>
+  environment:
+    &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://admin:admin@postgres/airflow
+    # For backward compatibility, with Airflow <2.3
+    AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://admin:admin@postgres/airflow
+    AIRFLOW__CORE__FERNET_KEY: ''
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
+    # yamllint disable rule:line-length
+    # Use simple http server on scheduler for health checks
+    # See https://airflow.apache.org/docs/apache-airflow/stable/administration-and-deployment/logging-monitoring/check-health.html#scheduler-health-check-server
+    # yamllint enable rule:line-length
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+    # WARNING: Use _PIP_ADDITIONAL_REQUIREMENTS option ONLY for a quick checks
+    # for other purpose (development, test and especially production usage) build/extend Airflow image.
+    _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-}
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./logs:/opt/airflow/logs
+    - ./plugins:/opt/airflow/plugins
+    - /var/run/docker.sock:/var/run/docker.sock
+    - ./spark/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on:
+    &airflow-common-depends-on
+    postgres:
+      condition: service_healthy
+#chmod +x ./docker-postgresql-multiple-databases/create-multiple-postgresql-databases.sh
 services:
+  postgres:
+    container_name: postgres
+    image: postgres:13
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin
+      POSTGRES_MULTIPLE_DATABASES: airflow,metastore_db
+    ports:
+      - 5432:5432
+    volumes:
+      - ./docker-postgresql-multiple-databases:/docker-entrypoint-initdb.d
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
+    networks:
+      - iceberg_net
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: webserver
+    command: webserver
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    networks:
+      - iceberg_net
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: scheduler
+    command: scheduler
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    networks:
+      - iceberg_net
+  airflow-triggerer:
+    <<: *airflow-common
+    container_name: triggerer
+    command: triggerer
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    networks:
+      - iceberg_net
+  airflow-init:
+      <<: *airflow-common
+      container_name:  airflow-init
+      entrypoint: /bin/bash
+      # yamllint disable rule:line-length
+      command:
+        - -c
+        - |
+          function ver() {
+            printf "%04d%04d%04d%04d" $${1//./ }
+          }
+          mkdir -p /sources/logs /sources/dags /sources/plugins
+          chown -R "${AIRFLOW_UID}:0" /sources/{logs,dags,plugins}
+          exec /entrypoint airflow version
+      # yamllint enable rule:line-length
+      environment:
+        <<: *airflow-common-env
+        _AIRFLOW_DB_UPGRADE: 'true'
+        _AIRFLOW_WWW_USER_CREATE: 'true'
+        _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}
+        _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow}
+        _PIP_ADDITIONAL_REQUIREMENTS: ''
+      user: "0:0"
+      volumes:
+        - ${AIRFLOW_PROJ_DIR:-.}:/sources
+      networks:
+        - iceberg_net
+
   spark-master:
     container_name: master
     image: lakehouse/spark-iceberg:3.4.1
@@ -33,14 +171,19 @@ services:
     depends_on:
       - minio
     volumes:
+      - ./conf/log4j2.properties:/opt/spark/conf/log4j2.properties
       - ./spark/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf
+      - /Users/hoangdung/Documents/Study/Scala/Test2/untitled/target/scala-2.12/untitled_2.12-0.1.0-SNAPSHOT.jar:/Users/hoangdung/Documents/Study/Scala/Test2/untitled/target/scala-2.12/untitled_2.12-0.1.0-SNAPSHOT.jar
+      - ./plugins/scripts/project_Hive_Spark/untitled_2.12-0.1.0-SNAPSHOT.jar:/opt/airflow/plugins/scripts/project_Hive_Spark/untitled_2.12-0.1.0-SNAPSHOT.jar
     env_file:
       - .env.spark
     ports:
-      - 8888:8888
-      - 8080:8080
       - 10000:10000
       - 10001:10001
+      - 8888:8888
+      - 9080:8080
+      - 7077:7077
+      - 6066:6066
     networks:
       iceberg_net:
   spark-worker-a:
@@ -52,9 +195,12 @@ services:
     env_file:
       - .env.spark
     volumes:
+      - ./conf/log4j2.properties:/opt/spark/conf/log4j2.properties
       - ./spark/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf
+      - /Users/hoangdung/Documents/Study/Scala/Test2/untitled/target/scala-2.12/untitled_2.12-0.1.0-SNAPSHOT.jar:/Users/hoangdung/Documents/Study/Scala/Test2/untitled/target/scala-2.12/untitled_2.12-0.1.0-SNAPSHOT.jar
+      - ./plugins/scripts/project_Hive_Spark/untitled_2.12-0.1.0-SNAPSHOT.jar:/opt/airflow/plugins/scripts/project_Hive_Spark/untitled_2.12-0.1.0-SNAPSHOT.jar
     ports:
-      - 9093:8081
+      - 9081:8081
       - 7001:7000
     environment:
       - SPARK_WORKER_CORES=3
@@ -70,12 +216,15 @@ services:
     env_file:
       - .env.spark
     volumes:
+      - ./conf/log4j2.properties:/opt/spark/conf/log4j2.properties
       - ./spark/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf
+      - /Users/hoangdung/Documents/Study/Scala/Test2/untitled/target/scala-2.12/untitled_2.12-0.1.0-SNAPSHOT.jar:/Users/hoangdung/Documents/Study/Scala/Test2/untitled/target/scala-2.12/untitled_2.12-0.1.0-SNAPSHOT.jar
+      - ./plugins/scripts/project_Hive_Spark/untitled_2.12-0.1.0-SNAPSHOT.jar:/opt/airflow/plugins/scripts/project_Hive_Spark/untitled_2.12-0.1.0-SNAPSHOT.jar
     environment:
       - SPARK_WORKER_CORES=3
       - SPARK_WORKER_MEMORY=1G
     ports:
-      - 9094:8081
+      - 9082:8081
       - 7002:7000
     networks:
       iceberg_net:
@@ -95,21 +244,6 @@ services:
       - 9001:9001
       - 9000:9000
     command: ["server", "/data", "--console-address", ":9001"]
-  postgres:
-    hostname: postgres
-    image: 'postgres:latest'
-    container_name: postgres
-    ports:
-      - 5432:5432
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-    environment:
-      POSTGRES_USER: admin
-      POSTGRES_PASSWORD: admin
-      POSTGRES_DB: metastore_db
-    networks:
-      - iceberg_net
-
   hive-metastore:
     hostname: hive-metastore
     image: 'hive-metastore:3.2.0'

@@ -1,0 +1,1 @@
+spark:x:1001:0:Spark:/opt/bitnami/spark:/bin/false
